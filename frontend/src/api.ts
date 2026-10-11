@@ -41,12 +41,25 @@ export async function postInfer(
   prompt: string,
   constraints: Constraints
 ): Promise<InferResponse> {
-  const res = await fetch(`${BASE}/infer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, constraints }),
-  });
-  return res.json();
+  // Backend caps a request at ~45s (incl. failover); abort slightly later as a safety net.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch(`${BASE}/infer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, constraints }),
+      signal: controller.signal,
+    });
+    return await res.json();
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Request timed out after 60s. No model responded in time.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function fetchLogs(): Promise<AuditEntry[]> {

@@ -29,7 +29,11 @@ _router = ModelRouter()
 _adapter = ModelAdapter()
 _engine = ConstraintEngine()
 
-MAX_FAILOVER = 3
+MAX_FAILOVER = 2                 # at most 3 attempts in total
+PRIMARY_TIMEOUT_MS = 20000       # first-choice model gets 20s before failover
+FALLBACK_TIMEOUT_MS = 12000      # each fallback model gets 12s
+TOTAL_BUDGET_MS = 45000          # hard ceiling for the whole /api/infer request
+MIN_ATTEMPT_MS = 8000            # adapter's minimum per-call deadline
 
 
 def _error(message: str, status: int = 400, extra: dict = None) -> tuple:
@@ -165,6 +169,7 @@ def infer():
     final_decision = None
     final_response = None
     final_model = None
+    final_result = {}
     last_error = None
     exec_mode = "SIMULATED"
 
@@ -173,6 +178,11 @@ def infer():
         candidate_models = {
             k: v for k, v in all_models.items() if k not in excluded_keys
         }
+
+        remaining_ms = TOTAL_BUDGET_MS - int((time.time() - wall_start) * 1000)
+        if attempt > 1 and remaining_ms < MIN_ATTEMPT_MS:
+            last_error = f"Request budget of {TOTAL_BUDGET_MS // 1000}s exhausted during failover."
+            break
 
         if not candidate_models:
             last_error = "All eligible models exhausted during failover."
@@ -193,6 +203,8 @@ def infer():
 
         profile = all_models[selected]
         timeout_ms = constraints.get("max_latency_ms", profile.max_latency_ms) or profile.max_latency_ms
+        attempt_cap_ms = PRIMARY_TIMEOUT_MS if attempt == 1 else FALLBACK_TIMEOUT_MS
+        timeout_ms = min(int(timeout_ms), attempt_cap_ms, max(remaining_ms, MIN_ATTEMPT_MS))
 
         result = _adapter.call_model(profile, prompt, int(timeout_ms))
 
@@ -202,6 +214,7 @@ def infer():
             "model_name": profile.name,
             "success": result["success"],
             "latency_ms": result["latency_ms"],
+            "tokens_used": result.get("tokens_used", 0),
             "simulated": result.get("simulated", False),
             "execution_mode": result.get("execution_mode", "SIMULATED"),
             "error": result.get("error"),
@@ -213,6 +226,7 @@ def infer():
         if result["success"]:
             final_response = result["text"]
             final_model = selected
+            final_result = result
             break
         else:
             # Failover: exclude failed candidate and re-run without relaxing constraints
@@ -221,6 +235,22 @@ def infer():
 
     total_ms = int((time.time() - wall_start) * 1000)
     last_sim = audit_trail[-1].get("simulated", False) if audit_trail else False
+
+    # Attach live response parameters to final_decision for frontend Inspector
+    if final_decision:
+        final_decision["tokens_used"] = final_result.get("tokens_used", 0)
+        final_decision["prompt_tokens"] = final_result.get("prompt_tokens", 0)
+        final_decision["completion_tokens"] = final_result.get("completion_tokens", 0)
+        final_decision["usage"] = final_result.get("usage", {})
+        final_decision["measured_latency_ms"] = final_result.get("latency_ms", total_ms)
+        final_decision["execution_mode"] = exec_mode
+
+    if final_model:
+        used_tokens = final_result.get("tokens_used", 0)
+        if used_tokens == 0 and final_response:
+            used_tokens = max(1, (len(prompt) + len(final_response)) // 4)
+        measured_lat = final_result.get("latency_ms", total_ms)
+        registry.record_token_usage(final_model, used_tokens, measured_lat)
 
     # Log request audit
     routing_logger.log_request(
@@ -237,7 +267,7 @@ def infer():
     )
 
     if final_model is not None:
-        model_obj = all_models.get(final_model)
+        model_obj = registry.get(final_model) or all_models.get(final_model)
         return _ok({
             "response": final_response,
             "model_used": final_model,
@@ -248,6 +278,10 @@ def infer():
             "failover_count": failover_count,
             "simulated": last_sim,
             "execution_mode": exec_mode,
+            "tokens_used": final_result.get("tokens_used", 0),
+            "prompt_tokens": final_result.get("prompt_tokens", 0),
+            "completion_tokens": final_result.get("completion_tokens", 0),
+            "usage": final_result.get("usage", {}),
         })
     else:
         # Explicit NO_VALID_MODEL contract

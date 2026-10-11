@@ -10,6 +10,8 @@ export interface ModelInfo {
   measured_latency_ms: number;
   capability_score: number;
   context_length: number;
+  tokens_used?: number;
+  tokens_remaining?: number;
   reliability: number;
   availability: boolean;
   enabled: boolean;
@@ -35,6 +37,7 @@ export interface CandidateResult {
   role?: string;
   status: 'selected' | 'passed' | 'rejected';
   rejection_reason?: string | null;
+  decision_reason?: string | null;
   score?: number | null;
   score_breakdown?: any;
   avg_latency_ms?: number;
@@ -64,6 +67,16 @@ export interface Decision {
   failover_chain: string[];
   message?: string;
   error?: string;
+  tokens_used?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  measured_latency_ms?: number;
+  execution_mode?: string;
 }
 
 export interface InferResponse {
@@ -74,6 +87,14 @@ export interface InferResponse {
   decision?: Decision;
   audit_trail?: any[];
   latency_ms?: number;
+  tokens_used?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
   execution_mode?: string;
   simulated?: boolean;
   failover_count?: number;

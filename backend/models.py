@@ -29,8 +29,8 @@ class ModelProfile:
     Represents a single registered model and its configuration.
 
     Parameters:
-        model_key           : Unique identifier (e.g. 'qwen-2b')
-        name                : Display name (e.g. 'Qwen3.5 2B')
+        model_key           : Unique identifier (e.g. 'liquid-lfm-2.6b')
+        name                : Display name (e.g. 'Liquid LFM2.5 2.6B')
         role                : Functional role description
         avg_latency_ms      : Configured estimate of average response latency (used for ranking)
         max_latency_ms      : Configured upper-bound latency estimate (hard deadline constraint)
@@ -40,9 +40,9 @@ class ModelProfile:
         reliability         : Reliability score (0.0 to 1.0)
         availability        : Whether model is online/offline
         enabled             : Enabled status for routing
-        cost_per_1k_tokens  : Cost in USD per 1K tokens (0.0 for local Ollama)
-        provider            : 'ollama' | 'gemini' | 'groq'
-        model_id            : Provider-specific model tag (e.g. 'qwen2.5:1.5b' or 'qwen3.5:2b')
+        cost_per_1k_tokens  : Cost in USD per 1K tokens (0.0 for free OpenRouter tier)
+        provider            : 'openrouter' | 'ollama' | 'gemini' | 'groq'
+        model_id            : Provider-specific model tag (e.g. 'liquid/lfm-2.5-2.6b:free')
         description         : Detailed description
     """
     model_key: str
@@ -60,6 +60,7 @@ class ModelProfile:
     provider: str
     model_id: str
     description: str
+    tokens_used: int = 0
 
     # Legacy/compatibility aliases
     @property
@@ -78,103 +79,109 @@ class ModelProfile:
     def available(self) -> bool:
         return self.availability and self.enabled
 
+    @property
+    def tokens_remaining(self) -> int:
+        return max(0, self.context_length - getattr(self, "tokens_used", 0))
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["capability"] = self.capability_score
         d["latency_ms"] = self.avg_latency_ms
         d["cost_per_token"] = self.cost_per_token
         d["available"] = self.available
+        d["tokens_used"] = getattr(self, "tokens_used", 0)
+        d["tokens_remaining"] = self.tokens_remaining
         return d
 
 
 # ---------------------------------------------------------------------------
-# Default 5 Ollama Model Profiles
+# Default 5 OpenRouter Model Profiles
 # ---------------------------------------------------------------------------
 _DEFAULT_PROFILES: List[dict] = [
     {
-        "model_key": "qwen-2b",
-        "name": "Qwen3.5 2B",
-        "role": "Lightweight tasks",
-        "avg_latency_ms": 650,
-        "max_latency_ms": 1800,
-        "measured_latency_ms": 620,
-        "capability_score": 4.5,
+        "model_key": "liquid-lfm-2.6b",
+        "name": "Liquid LFM2.5 2.6B",
+        "role": "Fast: Simple questions, extraction, basic RAG",
+        "avg_latency_ms": 550,
+        "max_latency_ms": 1600,
+        "measured_latency_ms": 510,
+        "capability_score": 4.2,
         "context_length": 32768,
         "reliability": 0.98,
         "availability": True,
         "enabled": True,
         "cost_per_1k_tokens": 0.0,
-        "provider": "ollama",
-        "model_id": "qwen2.5:1.5b",
-        "description": "Lightweight model for low-latency queries, summaries, and fact retrieval.",
+        "provider": "openrouter",
+        "model_id": "liquid/lfm-2.5-2.6b:free",
+        "description": "Lightweight edge model delivering ultra-fast responses for simple queries, text extraction, and basic RAG.",
     },
     {
-        "model_key": "qwen-4b",
-        "name": "Qwen3.5 4B",
-        "role": "General-purpose tasks",
-        "avg_latency_ms": 1250,
-        "max_latency_ms": 3200,
-        "measured_latency_ms": 1180,
-        "capability_score": 6.8,
-        "context_length": 32768,
+        "model_key": "nemotron-3.5-lightning",
+        "name": "NVIDIA Nemotron 3.5 Lightning",
+        "role": "Balanced: General tasks and agentic workflows",
+        "avg_latency_ms": 1150,
+        "max_latency_ms": 2900,
+        "measured_latency_ms": 1080,
+        "capability_score": 7.0,
+        "context_length": 65536,
         "reliability": 0.96,
         "availability": True,
         "enabled": True,
         "cost_per_1k_tokens": 0.0,
-        "provider": "ollama",
-        "model_id": "qwen2.5:3b",
-        "description": "General-purpose model balancing capability, latency, and context breadth.",
+        "provider": "openrouter",
+        "model_id": "nvidia/nemotron-3.5-lightning:free",
+        "description": "High-throughput balanced model optimized for daily requests, agentic execution, and versatile general tasks.",
     },
     {
-        "model_key": "deepseek-r1",
-        "name": "DeepSeek-R1 7B",
-        "role": "Reasoning and mathematics",
-        "avg_latency_ms": 2800,
-        "max_latency_ms": 7500,
-        "measured_latency_ms": 2740,
-        "capability_score": 8.9,
+        "model_key": "nemotron-3-super",
+        "name": "NVIDIA Nemotron 3 Super",
+        "role": "Advanced Reasoning: Complex reasoning and multistep analysis",
+        "avg_latency_ms": 2700,
+        "max_latency_ms": 7200,
+        "measured_latency_ms": 2600,
+        "capability_score": 9.5,
+        "context_length": 131072,
+        "reliability": 0.93,
+        "availability": True,
+        "enabled": True,
+        "cost_per_1k_tokens": 0.0,
+        "provider": "openrouter",
+        "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "description": "Massive 120B parameter MoE reasoning engine for deep chain-of-thought proofs, formal logic, and complex multi-step analysis.",
+    },
+    {
+        "model_key": "north-mini-code",
+        "name": "Cohere North Mini Code",
+        "role": "Coding Specialist: Coding and software engineering tasks",
+        "avg_latency_ms": 1650,
+        "max_latency_ms": 4200,
+        "measured_latency_ms": 1580,
+        "capability_score": 8.7,
         "context_length": 65536,
-        "reliability": 0.94,
-        "availability": True,
-        "enabled": True,
-        "cost_per_1k_tokens": 0.0,
-        "provider": "ollama",
-        "model_id": "deepseek-r1:7b",
-        "description": "Deep reasoning and chain-of-thought mathematical proof solver.",
-    },
-    {
-        "model_key": "gpt-oss-20b",
-        "name": "GPT-OSS 20B",
-        "role": "Advanced reasoning and coding",
-        "avg_latency_ms": 4200,
-        "max_latency_ms": 9500,
-        "measured_latency_ms": 4150,
-        "capability_score": 9.4,
-        "context_length": 131072,
-        "reliability": 0.92,
-        "availability": True,
-        "enabled": True,
-        "cost_per_1k_tokens": 0.0,
-        "provider": "ollama",
-        "model_id": "gpt-oss:20b",
-        "description": "Large-scale coding engine, architectural design, and complex problem solving.",
-    },
-    {
-        "model_key": "gemma-12b",
-        "name": "Gemma 4 12B",
-        "role": "Image understanding, OCR, and document parsing",
-        "avg_latency_ms": 3400,
-        "max_latency_ms": 8200,
-        "measured_latency_ms": 3310,
-        "capability_score": 8.2,
-        "context_length": 131072,
         "reliability": 0.95,
         "availability": True,
         "enabled": True,
         "cost_per_1k_tokens": 0.0,
-        "provider": "ollama",
-        "model_id": "gemma2:9b",
-        "description": "Multimodal analysis, text extraction, OCR, structured document synthesis.",
+        "provider": "openrouter",
+        "model_id": "cohere/north-mini-code:free",
+        "description": "Specialized coding model optimized for syntax generation, refactoring, algorithms, and software engineering.",
+    },
+    {
+        "model_key": "gemma-4-26b",
+        "name": "Google Gemma 4 26B A4B",
+        "role": "Multimodal: Images, charts, video and visual-document analysis",
+        "avg_latency_ms": 2300,
+        "max_latency_ms": 6000,
+        "measured_latency_ms": 2220,
+        "capability_score": 8.4,
+        "context_length": 131072,
+        "reliability": 0.94,
+        "availability": True,
+        "enabled": True,
+        "cost_per_1k_tokens": 0.0,
+        "provider": "openrouter",
+        "model_id": "google/gemma-4-26b-a4b-it:free",
+        "description": "Multimodal foundation model excelling at visual document analysis, chart comprehension, OCR, and structured data synthesis.",
     },
 ]
 
@@ -194,6 +201,8 @@ class ModelRegistry:
         "availability": bool,
         "enabled": bool,
         "cost_per_1k_tokens": (int, float),
+        "tokens_used": (int, float),
+        "measured_latency_ms": (int, float),
         # Legacy/UI alias support
         "latency_ms": (int, float),
         "capability": (int, float),
@@ -232,6 +241,8 @@ class ModelRegistry:
                             item["enabled"] = True
                         if "role" not in item:
                             item["role"] = "General task"
+                        if "tokens_used" not in item:
+                            item["tokens_used"] = 0
 
                         # Strip non-dataclass keys if any
                         clean_item = {
@@ -300,6 +311,10 @@ class ModelRegistry:
                 return False, "'cost_per_1k_tokens' cannot be negative"
             if key == "context_length" and val < 128:
                 return False, "'context_length' must be at least 128 tokens"
+            if key == "tokens_used" and val < 0:
+                return False, "'tokens_used' cannot be negative"
+            if key == "measured_latency_ms" and val < 0:
+                return False, "'measured_latency_ms' cannot be negative"
 
         return True, None
 
@@ -318,10 +333,10 @@ class ModelRegistry:
                 return None, err
 
             for key, val in updates.items():
-                if key == "latency_ms":
+                if key in ("latency_ms", "avg_latency_ms"):
                     profile.avg_latency_ms = int(val)
-                elif key == "avg_latency_ms":
-                    profile.avg_latency_ms = int(val)
+                    if profile.max_latency_ms < profile.avg_latency_ms:
+                        profile.max_latency_ms = profile.avg_latency_ms * 2
                 elif key == "max_latency_ms":
                     profile.max_latency_ms = int(val)
                 elif key in ("capability_score", "capability"):
@@ -339,6 +354,10 @@ class ModelRegistry:
                     profile.enabled = bool(val)
                 elif key == "cost_per_1k_tokens":
                     profile.cost_per_1k_tokens = float(val)
+                elif key == "tokens_used":
+                    profile.tokens_used = int(val)
+                elif key == "measured_latency_ms":
+                    profile.measured_latency_ms = int(val)
 
             self._save_to_disk_locked()
             return copy.deepcopy(profile), None
@@ -349,6 +368,16 @@ class ModelRegistry:
             profile = self._store.get(model_key)
             if profile:
                 profile.measured_latency_ms = measured_ms
+                self._save_to_disk_locked()
+
+    def record_token_usage(self, model_key: str, tokens: int, measured_ms: Optional[int] = None):
+        """Accumulate tokens used and update measured latency for a model."""
+        with self._lock:
+            profile = self._store.get(model_key)
+            if profile:
+                profile.tokens_used = getattr(profile, "tokens_used", 0) + max(0, int(tokens))
+                if measured_ms is not None:
+                    profile.measured_latency_ms = int(measured_ms)
                 self._save_to_disk_locked()
 
     def reset(self) -> List[dict]:

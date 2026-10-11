@@ -19,17 +19,17 @@ An intelligent inference gateway that dynamically routes each request to the opt
 
 ---
 
-## 🧠 Model Portfolio (Ollama Prototype)
+## 🧠 Model Portfolio (OpenRouter Free Tier)
 
-| Model | Role in ModelRouter | Download Size | Recommendation | Capability (1-10) | Context Length | Avg / Max Latency | Reliability |
-|-------|---------------------|---------------|----------------|-------------------|----------------|-------------------|-------------|
-| **Qwen3.5 2B** | Fast model for simple requests | ~2.7 GB | Essential | 3/10 | 4,096 | 650ms / 1,800ms | 96% |
-| **Qwen3.5 4B** | Balanced model for everyday requests | ~3.3–4.0 GB | Essential | 5/10 | 8,192 | 1,250ms / 3,200ms | 94% |
-| **DeepSeek-R1 7B** | Reasoning model for complex requests | ~4.7 GB | Essential | 8/10 | 16,384 | 2,800ms / 7,500ms | 91% |
-| **Phi-4-mini 3.8B** | Alternative for reasoning & mathematics | ~2.5 GB | Optional | 6/10 | 8,192 | 1,600ms / 4,200ms | 92% |
-| **Qwen3.5 9B** | Higher-capability candidate | ~6.6 GB | Experimental | 9/10 | 32,768 | 4,600ms / 11,500ms | 89% |
+| Role | Model | OpenRouter Model ID | Capability (1-10) | Context Length | Avg / Max Latency | Reliability | Primary Use |
+|------|-------|---------------------|-------------------|----------------|-------------------|-------------|-------------|
+| **⚡ Fast** | **Liquid LFM2.5 2.6B** | `liquid/lfm-2.5-2.6b:free` | 4.2/10 | 32,768 | 550ms / 1,600ms | 98% | Simple questions, extraction, basic RAG |
+| **⚖️ Balanced** | **NVIDIA Nemotron 3.5 Lightning** | `nvidia/nemotron-3.5-lightning:free` | 7.0/10 | 65,536 | 1,150ms / 2,900ms | 96% | General tasks and agentic workflows |
+| **🧠 Advanced Reasoning** | **NVIDIA Nemotron 3 Super** | `nvidia/nemotron-3-super-120b-a12b:free` | 9.5/10 | 131,072 | 2,700ms / 7,200ms | 93% | Complex reasoning and multistep analysis |
+| **💻 Coding Specialist** | **Cohere North Mini Code** | `cohere/north-mini-code:free` | 8.7/10 | 65,536 | 1,650ms / 4,200ms | 95% | Coding and software engineering tasks |
+| **🖼️ Multimodal** | **Google Gemma 4 26B A4B** | `google/gemma-4-26b-a4b-it:free` | 8.4/10 | 131,072 | 2,300ms / 6,000ms | 94% | Images, charts, video and visual-document analysis |
 
-> **Note**: As requested, models do not need to be pre-downloaded right now. The gateway features a hybrid execution engine: if local Ollama has models pulled, it invokes them live; otherwise, it executes high-fidelity persona-specific responses and real-time latency simulation.
+> **Note**: Input your free OpenRouter API key into `.env` (`OPENROUTER_API_KEY=...`). The gateway features a hybrid execution engine: if an API key is provided, it dispatches live inference to OpenRouter; otherwise, it executes high-fidelity persona-specific responses and real-time latency simulation.
 
 ---
 
@@ -75,9 +75,9 @@ Open `http://localhost:5173` in your browser.
 
 The UI includes 1-click test presets designed specifically for judging:
 
-1. **⚡ Fast Fact Retrieval**: Simple query with a 2,000ms latency budget routes directly to **Qwen3.5 2B**.
-2. **⚖️ Everyday Balanced**: Moderate query with a 3,500ms budget routes to **Qwen3.5 4B**.
-3. **🧠 Deep Reasoning & Math**: Complex multi-step proof routes to **DeepSeek-R1 7B** (or **Phi-4-mini 3.8B**).
+1. **⚡ Fast Fact Retrieval**: Simple query with a 2,000ms latency budget routes directly to **Liquid LFM2.5 2.6B**.
+2. **⚖️ Everyday Balanced**: Moderate query with a 3,500ms budget routes to **NVIDIA Nemotron 3.5 Lightning**.
+3. **🧠 Deep Reasoning & Math**: Complex multi-step proof routes to **NVIDIA Nemotron 3 Super**.
 4. **🚫 Strict SLA (Proof of No-Violation)**: Impossible constraint (e.g., Latency ≤ 400ms and Capability ≥ 9). Gateway immediately rejects rather than breaking constraints.
 5. **💥 Outage Failover Demo**: Simulates an outage on the primary model. Watch the gateway fail over to the next eligible model while strictly maintaining all constraints.
 6. **⏳ Timeout Failover Demo**: Simulates a latency breach on the primary model, triggering seamless constraint-preserving failover.

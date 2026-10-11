@@ -1,20 +1,30 @@
 """
-model_adapter.py - Provider Abstraction Layer for A-01 ModelRouter
--------------------------------------------------------------------
+model_adapter.py - OpenRouter Provider Layer for A-01 ModelRouter
+-----------------------------------------------------------------
 Translates routing decisions into model execution:
-- Local Ollama execution (CPU/GPU)
-- Realistic Persona-Based Simulation Fallback (when model not yet pulled or Ollama daemon offline)
-- Explicit execution mode flag: 'OLLAMA_LOCAL' vs 'SIMULATED'
+- Live OpenRouter cloud inference via https://openrouter.ai/api/v1/chat/completions
+- Realistic Persona-Based Simulation Fallback (when API key is not yet set or endpoint unreachable)
+- Explicit execution mode flag: 'OPENROUTER_INFERENCE' vs 'SIMULATED'
 - Measured latency recording to ModelRegistry
 """
 
 import os
 import time
 import random
-import textwrap
 import requests
+import concurrent.futures
 from typing import Optional
+from dotenv import load_dotenv
 from models import ModelProfile, registry
+
+load_dotenv()
+
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MAX_COMPLETION_TOKENS = 2048
+
+# Shared pool: a timed-out request is abandoned here (never joined), so the
+# gateway can fail over immediately instead of blocking until OpenRouter replies.
+_http_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="openrouter")
 
 
 def _simulate_response(profile: ModelProfile, prompt: str) -> dict:
@@ -30,11 +40,39 @@ def _simulate_response(profile: ModelProfile, prompt: str) -> dict:
     topic = " ".join(prompt_words[:5]) if prompt_words else "your query"
 
     personas = {
-        "qwen-2b": f"Hello! As Qwen3.5 2B (Lightweight), here is a fast response to: '{prompt}'. Everything is running smoothly on local CPU.",
-        "qwen-4b": f"Here is a balanced overview regarding '{topic}': Qwen3.5 4B provides well-rounded reasoning and direct answers for general-purpose requests.",
-        "deepseek-r1": f"[DeepSeek-R1 7B Reasoning Step-by-Step]\n1. Parsing problem: '{prompt}'\n2. Formal derivation and edge-case validation.\n3. Conclusion: The optimal solution follows mathematical principles with verifiable correctness.",
-        "gpt-oss-20b": f"[GPT-OSS 20B Advanced Architecture]\nAnalyzing context for '{topic}'. Here is the high-performance implementation plan with architectural tradeoffs evaluated.",
-        "gemma-12b": f"[Gemma 4 12B Document & Multimodal Analyzer]\nExtracted features and semantic parsing for '{topic}'. Analysis complete with full context verification.",
+        "liquid-lfm-2.6b": (
+            f"⚡ [Liquid LFM2.5 2.6B · Fast Edge Inference]\n"
+            f"Quick response to: '{prompt}'.\n"
+            f"Result: Direct, low-latency extraction and answer computed efficiently."
+        ),
+        "nemotron-3.5-lightning": (
+            f"⚖️ [NVIDIA Nemotron 3.5 Lightning · Balanced & Agentic]\n"
+            f"Analysis for '{topic}':\n"
+            f"Nemotron 3.5 Lightning delivers high-throughput general reasoning and balanced execution for everyday tasks."
+        ),
+        "nemotron-3-super": (
+            f"🧠 [NVIDIA Nemotron 3 Super · 120B Advanced Reasoning]\n"
+            f"1. Premise Evaluation: Deconstructing '{prompt}' into foundational constraints.\n"
+            f"2. Chain-of-Thought Proof: Analyzing mathematical and logical invariants step-by-step.\n"
+            f"3. Formal Resolution: The verified conclusion satisfies all required logical conditions."
+        ),
+        "north-mini-code": (
+            f"💻 [Cohere North Mini Code · Coding Specialist]\n"
+            f"Software engineering solution for '{topic}':\n"
+            f"```python\n"
+            f"# Optimized implementation for: {prompt[:40]}...\n"
+            f"def execute_task():\n"
+            f"    \"\"\"Refactored for optimal time complexity and reliability.\"\"\"\n"
+            f"    return {{\n"
+            f"        'status': 'complete',\n"
+            f"        'topic': '{topic}',\n"
+            f"    }}\n"
+            f"```"
+        ),
+        "gemma-4-26b": (
+            f"🖼️ [Google Gemma 4 26B A4B · Multimodal & Document Synthesis]\n"
+            f"Multimodal feature parsing and visual-document synthesis for '{topic}'. Extracted structured representation with context verification."
+        ),
     }
 
     content = personas.get(
@@ -43,10 +81,19 @@ def _simulate_response(profile: ModelProfile, prompt: str) -> dict:
     )
 
     actual_ms = int(sleep_secs * 1000)
+    toks = max(10, len(content) // 4)
+    p_toks = max(1, len(prompt.split()))
     return {
         "text": content,
         "latency_ms": actual_ms,
-        "tokens_used": max(10, len(content) // 4),
+        "tokens_used": toks,
+        "prompt_tokens": p_toks,
+        "completion_tokens": toks,
+        "usage": {
+            "prompt_tokens": p_toks,
+            "completion_tokens": toks,
+            "total_tokens": p_toks + toks,
+        },
         "success": True,
         "error": None,
         "simulated": True,
@@ -54,48 +101,118 @@ def _simulate_response(profile: ModelProfile, prompt: str) -> dict:
     }
 
 
-def _call_ollama(profile: ModelProfile, prompt: str, timeout_ms: int) -> dict:
+def _call_openrouter(profile: ModelProfile, prompt: str, timeout_ms: int) -> dict:
     """
-    Invokes local Ollama daemon if available and model is downloaded.
-    Falls back gracefully to simulation if Ollama is not active.
+    Invokes OpenRouter chat completions API using OPENROUTER_API_KEY.
+    Enforces a strict, client-side wall-clock timeout to prevent indefinite hangs in cloud queues.
+    Triggers gateway failover if a model takes longer than its SLA timeout.
     """
-    timeout_s = max(2.0, timeout_ms / 1000.0)
-    url = "http://localhost:11434/api/generate"
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+
+    # If no key or placeholder key configured, fall back to high-fidelity simulation
+    if not api_key or api_key in ("your_openrouter_api_key_here", "sk-or-your_openrouter_api_key_here"):
+        sim_res = _simulate_response(profile, prompt)
+        sim_res["error"] = "OPENROUTER_API_KEY not configured in .env. Running simulated execution."
+        return sim_res
+
+    # Enforceable client-side wall-clock timeout limit (capped between 8s and 25s)
+    effective_timeout = min(25.0, max(8.0, float(timeout_ms) / 1000.0 if timeout_ms else 15.0))
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": os.environ.get("OPENROUTER_REFERER", "http://localhost:3000"),
+        "X-Title": os.environ.get("OPENROUTER_TITLE", "ModelRouter Gateway"),
+    }
     payload = {
-        "model": profile.model_id or "qwen2.5:1.5b",
-        "prompt": prompt,
-        "stream": False,
+        "model": profile.model_id or "liquid/lfm-2.5-2.6b:free",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": MAX_COMPLETION_TOKENS,
     }
 
     start = time.time()
     try:
-        resp = requests.post(url, json=payload, timeout=timeout_s)
+        # Run HTTP post in thread with strict wall-clock deadline
+        future = _http_pool.submit(
+            requests.post,
+            OPENROUTER_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=effective_timeout,
+        )
+        try:
+            resp = future.result(timeout=effective_timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()  # no-op if already running; the worker finishes in the background
+            raise
+
         elapsed_ms = int((time.time() - start) * 1000)
 
         if resp.status_code == 200:
             data = resp.json()
-            response_text = data.get("response", "")
-            tokens_used = data.get("eval_count", max(1, len(response_text) // 4))
+            choices = data.get("choices", [])
+            response_text = ""
+            if choices and isinstance(choices, list):
+                msg = choices[0].get("message", {})
+                response_text = msg.get("content", "")
+
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", max(1, len(prompt.split())))
+            completion_tokens = usage.get("completion_tokens", max(1, len(response_text.split())))
+            tokens_used = usage.get("total_tokens", prompt_tokens + completion_tokens)
+
             return {
                 "text": response_text,
                 "latency_ms": elapsed_ms,
                 "tokens_used": tokens_used,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": tokens_used,
+                },
                 "success": True,
                 "error": None,
                 "simulated": False,
-                "execution_mode": "REAL_OLLAMA_INFERENCE",
+                "execution_mode": "OPENROUTER_INFERENCE",
             }
         else:
-            # Model not pulled in Ollama -> Fallback to simulation with notification
-            sim_res = _simulate_response(profile, prompt)
-            sim_res["error"] = f"Ollama HTTP {resp.status_code} (model may need pulling). Ran simulation."
-            return sim_res
+            # OpenRouter returned non-200 (rate limit, quota, server error) -> Trigger failover
+            elapsed_ms = int((time.time() - start) * 1000)
+            return {
+                "text": None,
+                "latency_ms": elapsed_ms,
+                "tokens_used": 0,
+                "success": False,
+                "error": f"OpenRouter HTTP {resp.status_code}: {resp.text[:120]}",
+                "simulated": False,
+                "execution_mode": "API_ERROR",
+            }
 
+    except concurrent.futures.TimeoutError:
+        elapsed_ms = int((time.time() - start) * 1000)
+        return {
+            "text": None,
+            "latency_ms": elapsed_ms,
+            "tokens_used": 0,
+            "success": False,
+            "error": f"Cloud queue timeout: '{profile.name}' exceeded {int(effective_timeout)}s SLA deadline. Triggering failover.",
+            "simulated": False,
+            "execution_mode": "TIMEOUT_FAILOVER",
+        }
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-        # Ollama daemon not running or timed out -> Fallback to deterministic CPU simulation
-        sim_res = _simulate_response(profile, prompt)
-        sim_res["error"] = f"Local Ollama daemon unreachable ({type(e).__name__}). Using simulated execution."
-        return sim_res
+        elapsed_ms = int((time.time() - start) * 1000)
+        return {
+            "text": None,
+            "latency_ms": elapsed_ms,
+            "tokens_used": 0,
+            "success": False,
+            "error": f"OpenRouter API unreachable or timed out ({type(e).__name__}).",
+            "simulated": False,
+            "execution_mode": "TIMEOUT_FAILOVER",
+        }
 
 
 class ModelAdapter:
@@ -104,7 +221,7 @@ class ModelAdapter:
     """
 
     def call_model(self, profile: ModelProfile, prompt: str, timeout_ms: int = 5000) -> dict:
-        result = _call_ollama(profile, prompt, timeout_ms)
+        result = _call_openrouter(profile, prompt, timeout_ms)
 
         # Record actual execution latency (concept C: measured latency)
         # Distinct from judge-configured latency estimate (concept A)

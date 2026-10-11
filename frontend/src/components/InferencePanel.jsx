@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { infer, routeOnly } from '../api';
-import ConstraintBoundaryChart from './ConstraintBoundaryChart';
+import MultiParameterRadarChart from './MultiParameterRadarChart';
 import ScoreBreakdownChart from './ScoreBreakdownChart';
 
 const OPTIMIZATION_OPTIONS = [
@@ -617,10 +617,10 @@ export default function InferencePanel({ models, onRefresh }) {
                 </div>
               )}
 
-              {/* DYNAMIC GRAPH 1: 2D Constraint Boundary Solution Space Map */}
+              {/* DYNAMIC MULTI-PARAMETER RADAR & SCORECARD */}
               {result.routing_decision && (
                 <div className="animate-slide-up" style={{ marginBottom: '16px' }}>
-                  <ConstraintBoundaryChart
+                  <MultiParameterRadarChart
                     decision={result.routing_decision}
                     constraints={{
                       max_latency_ms: maxLatency ? parseInt(maxLatency, 10) : undefined,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import ConstraintBoundaryChart from './ConstraintBoundaryChart';
+import MultiParameterRadarChart from './MultiParameterRadarChart';
 import QueryTimelineChart from './QueryTimelineChart';
 import ScoreBreakdownChart from './ScoreBreakdownChart';
 
@@ -16,13 +16,13 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
     ? timeline[selectedTimelineIdx]
     : (timeline.length > 0 ? timeline[timeline.length - 1] : null);
 
-  // Build constraints object for boundary plot
+  // Build constraints object
   const activeConstraints = activeTimelineItem ? {
     max_latency_ms: activeTimelineItem.max_latency_constraint,
     min_capability_score: activeTimelineItem.min_capability_constraint,
   } : null;
 
-  // Mock or latest routing decision structure for boundary plot
+  // Mock or latest routing decision structure
   const activeDecision = stats?.latest_entry?.routing_decision || {
     selected_model_id: activeTimelineItem?.model,
     candidates: models?.map((m) => ({
@@ -31,9 +31,14 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
       capability_score: m.capability_score,
       avg_latency_ms: m.avg_latency_ms,
       max_latency_ms: m.max_latency_ms,
+      context_length: m.context_length,
+      reliability: m.reliability,
+      current_load: m.current_load,
       eligible: activeConstraints?.max_latency_ms ? m.max_latency_ms <= activeConstraints.max_latency_ms : true,
     })),
   };
+
+  const activeModelId = activeTimelineItem?.model || activeDecision?.selected_model_id;
 
   return (
     <div className="animate-fade-in">
@@ -42,10 +47,10 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '1.4rem' }}>📊</span>
-            <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>ModelRouter Analytics & Dynamic Graphs</h2>
+            <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>ModelRouter Analytics & Multi-Parameter Decision Visualizer</h2>
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
-            Live telemetry tracking routing decisions, dynamic 2D constraint solution spaces, and performance trends.
+            Visualizing dynamic routing across all 6 core parameters: Latency, Capability, Context, Reliability, Task Suitability & Load.
           </p>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={onRefresh}>
@@ -104,23 +109,23 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         </div>
       </div>
 
-      {/* Dynamic Graph 1 & 2 Section: Active Query Constraint Boundary & Score Breakdown */}
+      {/* DYNAMIC MULTI-PARAMETER RADAR & SELECTION BREAKDOWN */}
       <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
           <div>
-            <div style={{ fontSize: '1.05rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span>📐 Dynamic Constraint Boundary & Decision Map</span>
-              <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>Real-Time Parameter Plot</span>
+            <div style={{ fontSize: '1.1rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>🕸️ Multi-Parameter Decision Map & Winner Rationale</span>
+              <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>Multi-Attribute Decision</span>
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Visualizes the exact SLA boundary and why the winner was chosen for this specific query
+              Shows clearly which model was chosen and how it won across Latency, Capability, Context, Reliability, Task Match & Load.
             </div>
           </div>
 
           {/* Dynamic Query Selector */}
           {timeline.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>Inspect Query:</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>Inspect Past Query:</span>
               <select
                 className="form-select"
                 style={{ padding: '6px 12px', fontSize: '0.75rem', minWidth: '220px' }}
@@ -140,8 +145,8 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         {/* Selected Query Details Bar */}
         {activeTimelineItem && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '8px', marginBottom: '16px', fontSize: '0.8rem', flexWrap: 'wrap' }}>
-            <span><strong>Prompt:</strong> "{activeTimelineItem.prompt}"</span>
-            <span className="badge badge-blue">Model: {activeTimelineItem.model}</span>
+            <span><strong>Active Query:</strong> "{activeTimelineItem.prompt}"</span>
+            <span className="badge badge-green">Chosen: {activeTimelineItem.model}</span>
             <span className="badge badge-cyan">Latency: {activeTimelineItem.latency_ms}ms</span>
             {activeTimelineItem.max_latency_constraint && (
               <span className="badge badge-red">SLA Budget: {activeTimelineItem.max_latency_constraint}ms</span>
@@ -150,23 +155,24 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
           </div>
         )}
 
-        {/* 2D Solution Space Chart */}
-        <ConstraintBoundaryChart
+        {/* 6-Axis Multi-Parameter Radar Component */}
+        <MultiParameterRadarChart
           decision={activeDecision}
           constraints={activeConstraints}
           models={models}
+          activeModelId={activeModelId}
         />
 
         {/* Candidate Scoring Breakdown */}
         {activeDecision?.candidates && (
           <ScoreBreakdownChart
             candidates={activeDecision.candidates}
-            selectedModelId={activeDecision.selected_model_id}
+            selectedModelId={activeModelId}
           />
         )}
       </div>
 
-      {/* Dynamic Graph 3: Historical Query Timeline Chart */}
+      {/* Dynamic Graph 2: Historical Query Timeline Chart */}
       <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
         <QueryTimelineChart timeline={timeline} />
       </div>

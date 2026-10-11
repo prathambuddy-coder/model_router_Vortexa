@@ -6,7 +6,6 @@ so that behaviour can be reviewed by judges.
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -88,7 +87,7 @@ class AuditLogger:
         return None
 
     def get_stats(self) -> dict:
-        """Get aggregate statistics for dashboard display."""
+        """Get aggregate statistics and time-series telemetry for dashboard graphs."""
         if not self._entries:
             return {
                 "total_requests": 0,
@@ -97,6 +96,9 @@ class AuditLogger:
                 "fallback_rate": 0.0,
                 "model_usage": {},
                 "complexity_distribution": {},
+                "recent_timeline": [],
+                "latency_saved_ms": 0,
+                "latest_entry": None,
             }
 
         total = len(self._entries)
@@ -116,6 +118,28 @@ class AuditLogger:
             key = e.estimated_complexity.value
             complexity_dist[key] = complexity_dist.get(key, 0) + 1
 
+        # Latency savings compared to default static routing to largest model (4600ms baseline)
+        baseline_latency = 4600
+        latency_saved = sum(max(0, baseline_latency - e.latency_ms) for e in self._entries if e.success)
+
+        # Dynamic query timeline points (last 15 requests)
+        timeline = []
+        for e in self._entries[-15:]:
+            timeline.append({
+                "request_id": e.request_id,
+                "timestamp": e.timestamp,
+                "prompt": e.prompt_preview,
+                "latency_ms": e.latency_ms,
+                "model": e.selected_model or "Rejected",
+                "complexity": e.estimated_complexity.value,
+                "success": e.success,
+                "fallback_used": e.fallback_used,
+                "max_latency_constraint": e.constraints.get("max_latency_ms"),
+                "min_capability_constraint": e.constraints.get("min_capability_score"),
+            })
+
+        latest_entry = self._entries[-1].model_dump() if self._entries else None
+
         return {
             "total_requests": total,
             "success_rate": round(successes / total * 100, 1),
@@ -123,6 +147,9 @@ class AuditLogger:
             "fallback_rate": round(fallbacks / total * 100, 1),
             "model_usage": model_usage,
             "complexity_distribution": complexity_dist,
+            "recent_timeline": timeline,
+            "latency_saved_ms": latency_saved,
+            "latest_entry": latest_entry,
         }
 
 

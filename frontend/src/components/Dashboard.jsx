@@ -1,8 +1,39 @@
-import React from 'react';
+import React, { useState } from 'react';
+import ConstraintBoundaryChart from './ConstraintBoundaryChart';
+import QueryTimelineChart from './QueryTimelineChart';
+import ScoreBreakdownChart from './ScoreBreakdownChart';
 
 export default function Dashboard({ stats, models, health, onRefresh }) {
   const totalModels = models?.length || 0;
   const availableModels = models?.filter((m) => m.available !== false && m.enabled).length || 0;
+
+  // Selected query for dynamic graph inspection
+  const timeline = stats?.recent_timeline || [];
+  const [selectedTimelineIdx, setSelectedTimelineIdx] = useState(null);
+
+  // If user selected a specific past query, use its data; otherwise use latest
+  const activeTimelineItem = (selectedTimelineIdx !== null && timeline[selectedTimelineIdx])
+    ? timeline[selectedTimelineIdx]
+    : (timeline.length > 0 ? timeline[timeline.length - 1] : null);
+
+  // Build constraints object for boundary plot
+  const activeConstraints = activeTimelineItem ? {
+    max_latency_ms: activeTimelineItem.max_latency_constraint,
+    min_capability_score: activeTimelineItem.min_capability_constraint,
+  } : null;
+
+  // Mock or latest routing decision structure for boundary plot
+  const activeDecision = stats?.latest_entry?.routing_decision || {
+    selected_model_id: activeTimelineItem?.model,
+    candidates: models?.map((m) => ({
+      model_id: m.id,
+      model_name: m.name,
+      capability_score: m.capability_score,
+      avg_latency_ms: m.avg_latency_ms,
+      max_latency_ms: m.max_latency_ms,
+      eligible: activeConstraints?.max_latency_ms ? m.max_latency_ms <= activeConstraints.max_latency_ms : true,
+    })),
+  };
 
   return (
     <div className="animate-fade-in">
@@ -11,10 +42,10 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '1.4rem' }}>📊</span>
-            <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>ModelRouter Analytics & Observability</h2>
+            <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>ModelRouter Analytics & Dynamic Graphs</h2>
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '4px' }}>
-            Real-time telemetry tracking routing efficiency, hard constraint compliance, and failover dynamics.
+            Live telemetry tracking routing decisions, dynamic 2D constraint solution spaces, and performance trends.
           </p>
         </div>
         <button className="btn btn-secondary btn-sm" onClick={onRefresh}>
@@ -22,16 +53,16 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         </button>
       </div>
 
-      {/* Stats Cards */}
+      {/* KPI Cards Grid */}
       <div className="stats-grid" style={{ marginBottom: '24px' }}>
         <div className="stat-card">
           <div className="stat-label">Total Requests</div>
           <div className="stat-value">{stats?.total_requests || 0}</div>
-          <div className="stat-sub" style={{ color: 'var(--text-tertiary)' }}>Inference & routing queries</div>
+          <div className="stat-sub" style={{ color: 'var(--text-tertiary)' }}>Live & simulated traffic</div>
         </div>
 
         <div className="stat-card">
-          <div className="stat-label">SLA Success Rate</div>
+          <div className="stat-label">SLA Compliance</div>
           <div className="stat-value" style={{ color: (stats?.success_rate || 100) >= 90 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
             {stats?.total_requests ? `${stats.success_rate}%` : '100%'}
           </div>
@@ -41,9 +72,17 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         </div>
 
         <div className="stat-card">
-          <div className="stat-label">Avg Latency</div>
+          <div className="stat-label">Avg Response Latency</div>
           <div className="stat-value">{stats?.avg_latency_ms || 0}ms</div>
-          <div className="stat-sub" style={{ color: 'var(--accent-cyan)' }}>Across active candidates</div>
+          <div className="stat-sub" style={{ color: 'var(--accent-cyan)' }}>Optimal speed matching</div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-label">Latency Saved</div>
+          <div className="stat-value" style={{ color: 'var(--accent-green)' }}>
+            {((stats?.latency_saved_ms || 0) / 1000).toFixed(1)}s
+          </div>
+          <div className="stat-sub" style={{ color: 'var(--text-tertiary)' }}>vs. always routing to largest model</div>
         </div>
 
         <div className="stat-card">
@@ -55,12 +94,6 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
         </div>
 
         <div className="stat-card">
-          <div className="stat-label">Active Models</div>
-          <div className="stat-value">{availableModels} / {totalModels}</div>
-          <div className="stat-sub" style={{ color: 'var(--accent-green)' }}>Ready for dispatch</div>
-        </div>
-
-        <div className="stat-card">
           <div className="stat-label">Inference Engine</div>
           <div className="stat-value" style={{ fontSize: '1.05rem', color: health?.ollama_connected ? 'var(--accent-green)' : 'var(--accent-cyan)' }}>
             {health?.ollama_connected ? '🟢 Ollama Live' : '⚡ Smart Simulator'}
@@ -69,6 +102,73 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
             {health?.ollama_connected ? 'Local daemon connected' : 'Full persona simulation'}
           </div>
         </div>
+      </div>
+
+      {/* Dynamic Graph 1 & 2 Section: Active Query Constraint Boundary & Score Breakdown */}
+      <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+          <div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>📐 Dynamic Constraint Boundary & Decision Map</span>
+              <span className="badge badge-purple" style={{ fontSize: '0.7rem' }}>Real-Time Parameter Plot</span>
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              Visualizes the exact SLA boundary and why the winner was chosen for this specific query
+            </div>
+          </div>
+
+          {/* Dynamic Query Selector */}
+          {timeline.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>Inspect Query:</span>
+              <select
+                className="form-select"
+                style={{ padding: '6px 12px', fontSize: '0.75rem', minWidth: '220px' }}
+                value={selectedTimelineIdx !== null ? selectedTimelineIdx : (timeline.length - 1)}
+                onChange={(e) => setSelectedTimelineIdx(parseInt(e.target.value, 10))}
+              >
+                {timeline.map((item, idx) => (
+                  <option key={idx} value={idx}>
+                    #{item.request_id} — {item.model} ({item.complexity})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* Selected Query Details Bar */}
+        {activeTimelineItem && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: 'rgba(15, 23, 42, 0.6)', borderRadius: '8px', marginBottom: '16px', fontSize: '0.8rem', flexWrap: 'wrap' }}>
+            <span><strong>Prompt:</strong> "{activeTimelineItem.prompt}"</span>
+            <span className="badge badge-blue">Model: {activeTimelineItem.model}</span>
+            <span className="badge badge-cyan">Latency: {activeTimelineItem.latency_ms}ms</span>
+            {activeTimelineItem.max_latency_constraint && (
+              <span className="badge badge-red">SLA Budget: {activeTimelineItem.max_latency_constraint}ms</span>
+            )}
+            <span className="badge badge-purple">Complexity: {activeTimelineItem.complexity}</span>
+          </div>
+        )}
+
+        {/* 2D Solution Space Chart */}
+        <ConstraintBoundaryChart
+          decision={activeDecision}
+          constraints={activeConstraints}
+          models={models}
+        />
+
+        {/* Candidate Scoring Breakdown */}
+        {activeDecision?.candidates && (
+          <ScoreBreakdownChart
+            candidates={activeDecision.candidates}
+            selectedModelId={activeDecision.selected_model_id}
+          />
+        )}
+      </div>
+
+      {/* Dynamic Graph 3: Historical Query Timeline Chart */}
+      <div className="card" style={{ marginBottom: '24px', padding: '20px' }}>
+        <QueryTimelineChart timeline={timeline} />
       </div>
 
       {/* Visual Pipeline Architecture Card */}
@@ -192,59 +292,6 @@ export default function Dashboard({ stats, models, health, onRefresh }) {
               <div className="empty-state-text">Complexity distribution will populate as requests are sent.</div>
             </div>
           )}
-        </div>
-      </div>
-
-      {/* Model Registry Specifications Reference Table */}
-      <div className="card" style={{ marginTop: '24px', padding: '0', overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-default)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>📋 Model Portfolio Specification (Problem Statement Matrix)</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Comparing model capabilities, latencies, and roles under Ollama local execution
-            </div>
-          </div>
-        </div>
-
-        <div className="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Role in ModelRouter</th>
-                <th>Download Size</th>
-                <th>Capability Score</th>
-                <th>Context Length</th>
-                <th>Avg / Max Latency</th>
-                <th>Reliability</th>
-                <th>Tier</th>
-              </tr>
-            </thead>
-            <tbody>
-              {models?.map((m) => (
-                <tr key={m.id}>
-                  <td>
-                    <strong>{m.name}</strong>
-                  </td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{m.role}</td>
-                  <td className="mono" style={{ fontSize: '0.8rem' }}>{m.download_size}</td>
-                  <td>
-                    <span className="badge badge-purple">{m.capability_score}/10</span>
-                  </td>
-                  <td className="mono" style={{ fontSize: '0.8rem' }}>{(m.context_length / 1024).toFixed(0)}K tokens</td>
-                  <td className="mono" style={{ fontSize: '0.8rem' }}>{m.avg_latency_ms}ms / {m.max_latency_ms}ms</td>
-                  <td>
-                    <span className="badge badge-green">{(m.reliability * 100).toFixed(0)}%</span>
-                  </td>
-                  <td>
-                    <span className={`badge ${m.tier === 'essential' ? 'badge-green' : m.tier === 'optional' ? 'badge-blue' : 'badge-purple'}`}>
-                      {m.recommendation || m.tier}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </div>
     </div>

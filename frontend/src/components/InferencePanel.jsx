@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { infer, routeOnly } from '../api';
+import ConstraintBoundaryChart from './ConstraintBoundaryChart';
+import ScoreBreakdownChart from './ScoreBreakdownChart';
 
 const OPTIMIZATION_OPTIONS = [
   { value: 'balanced', label: '⚖️ Balanced (Multi-Objective)', desc: 'Optimizes across capability, latency, reliability, and load' },
@@ -23,6 +25,7 @@ export default function InferencePanel({ models, onRefresh }) {
   const [error, setError] = useState(null);
   const [mode, setMode] = useState('infer'); // 'infer' or 'route'
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
@@ -189,6 +192,40 @@ export default function InferencePanel({ models, onRefresh }) {
     setOptimization(p.optimization);
     setSimulateFailModel(p.simulateFail || '');
     setForceTimeout(Boolean(p.forceTimeout));
+  };
+
+  const handleCopy = () => {
+    if (result?.response_text) {
+      navigator.clipboard.writeText(result.response_text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  // Helper to parse <think>...</think> from reasoning models
+  const renderResponseContent = (text) => {
+    if (!text) return null;
+    const thinkMatch = text.match(/<think>([\s\S]*?)<\/think>/);
+    if (thinkMatch) {
+      const thinkText = thinkMatch[1].trim();
+      const afterText = text.replace(/<think>[\s\S]*?<\/think>/, '').trim();
+      return (
+        <div>
+          <details style={{ marginBottom: '14px', background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '8px', padding: '10px 14px' }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 700, color: 'var(--accent-purple)', fontSize: '0.85rem' }}>
+              🧠 DeepSeek-R1 Chain-of-Thought Reasoning Trace (Click to inspect)
+            </summary>
+            <div style={{ marginTop: '10px', fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+              {thinkText}
+            </div>
+          </details>
+          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+            {afterText}
+          </div>
+        </div>
+      );
+    }
+    return <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{text}</div>;
   };
 
   return (
@@ -452,7 +489,7 @@ export default function InferencePanel({ models, onRefresh }) {
           </form>
         </div>
 
-        {/* Right Column: Decisions, Response, and Candidates Matrix */}
+        {/* Right Column: Decisions, Response, and Dynamic Graphs */}
         <div className="response-panel">
           {error && (
             <div className="error-banner animate-fade-in" style={{ padding: '14px 18px', borderRadius: '10px' }}>
@@ -550,16 +587,24 @@ export default function InferencePanel({ models, onRefresh }) {
                       <div className="card-title">💬 Generated Model Response</div>
                       <span className="badge badge-blue">{result.model_name}</span>
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                      Execution: {result.execution_type}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleCopy}
+                        style={{ fontSize: '0.72rem', padding: '4px 8px' }}
+                      >
+                        {copied ? '✓ Copied' : '📋 Copy'}
+                      </button>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                        Execution: {result.execution_type}
+                      </span>
+                    </div>
                   </div>
                   <div
                     className="response-text"
                     style={{
                       maxHeight: '400px',
                       overflowY: 'auto',
-                      whiteSpace: 'pre-wrap',
                       background: 'rgba(10, 14, 23, 0.8)',
                       padding: '16px',
                       borderRadius: '8px',
@@ -567,8 +612,32 @@ export default function InferencePanel({ models, onRefresh }) {
                       lineHeight: 1.6,
                     }}
                   >
-                    {result.response_text}
+                    {renderResponseContent(result.response_text)}
                   </div>
+                </div>
+              )}
+
+              {/* DYNAMIC GRAPH 1: 2D Constraint Boundary Solution Space Map */}
+              {result.routing_decision && (
+                <div className="animate-slide-up" style={{ marginBottom: '16px' }}>
+                  <ConstraintBoundaryChart
+                    decision={result.routing_decision}
+                    constraints={{
+                      max_latency_ms: maxLatency ? parseInt(maxLatency, 10) : undefined,
+                      min_capability_score: minCapability ? parseInt(minCapability, 10) : undefined,
+                    }}
+                    models={models}
+                  />
+                </div>
+              )}
+
+              {/* DYNAMIC GRAPH 2: Mathematical Scoring Breakdown */}
+              {result.routing_decision?.candidates && (
+                <div className="animate-slide-up" style={{ marginBottom: '16px' }}>
+                  <ScoreBreakdownChart
+                    candidates={result.routing_decision.candidates}
+                    selectedModelId={result.routing_decision.selected_model_id}
+                  />
                 </div>
               )}
 
@@ -701,19 +770,6 @@ export default function InferencePanel({ models, onRefresh }) {
                               <strong>Rejection reason:</strong> {c.rejection_reasons.join('; ')}
                             </div>
                           )}
-
-                          {/* Score breakdown if eligible */}
-                          {c.eligible && c.score_breakdown && (
-                            <div style={{ marginTop: '6px', fontSize: '0.7rem', color: 'var(--text-tertiary)', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                              <span>⚡ Speed: +{c.score_breakdown.latency_contribution}</span>
-                              <span>🧠 Quality: +{c.score_breakdown.capability_contribution}</span>
-                              <span>🛡️ Reliability: +{c.score_breakdown.reliability_contribution}</span>
-                              <span>🎯 Task Match: +{c.score_breakdown.task_suitability_bonus}</span>
-                              {c.score_breakdown.load_penalty > 0 && (
-                                <span style={{ color: 'var(--accent-amber)' }}>⚠️ Load: -{c.score_breakdown.load_penalty}</span>
-                              )}
-                            </div>
-                          )}
                         </div>
                       );
                     })}
@@ -758,7 +814,7 @@ export default function InferencePanel({ models, onRefresh }) {
               <h3 style={{ fontSize: '1.2rem', fontWeight: 700 }}>Inference Gateway Ready</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '420px', margin: '8px auto 20px', lineHeight: 1.5 }}>
                 Select a benchmark preset above or enter a prompt with explicit constraints.
-                The router dynamically selects the optimal model, proves explainability, and handles failovers.
+                The router dynamically selects the optimal model, renders 2D boundary solution maps, and handles failovers.
               </p>
               <div style={{ display: 'flex', justifyContent: 'center', gap: '10px' }}>
                 <button className="btn btn-secondary btn-sm" onClick={() => applyPreset(PRESETS[0])}>

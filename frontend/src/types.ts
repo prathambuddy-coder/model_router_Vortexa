@@ -96,6 +96,7 @@ export interface InferResponse {
     total_tokens?: number;
   };
   execution_mode?: string;
+  served_by?: string;
   simulated?: boolean;
   failover_count?: number;
   status?: string;
@@ -129,4 +130,5 @@ export interface ChatMessage {
   decision?: Decision;
   timestamp: Date;
   latencyMs?: number;
+  images?: string[];
 }

@@ -6,6 +6,8 @@ import CrystalizedBall from './CrystalizedBall';
 import LatticeLoader from './LatticeLoader';
 import GlideSelect from './GlideSelect';
 import ModelConfigModal from './ModelConfigModal';
+import ConstraintsPanel, { EMPTY_CONSTRAINTS, toConstraintPayload, activeConstraintCount } from './ConstraintsPanel';
+import type { ConstraintForm } from './ConstraintsPanel';
 
 interface ChatPanelProps {
   models: ModelInfo[];
@@ -16,6 +18,10 @@ interface ChatPanelProps {
   onOpenSidebar: () => void;
   onResetChat?: () => void;
 }
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TEXT_BYTES = 200 * 1024;
+const TEXT_EXT = /\.(txt|md|csv|json|py|js|ts|tsx|jsx|html|css|xml|ya?ml|log|sql|java|c|cpp|go|rs)$/i;
 
 let msgCounter = 0;
 function uid() {
@@ -37,6 +43,39 @@ export default function ChatPanel({
   const [selectedModelKey, setSelectedModelKey] = useState<string>('auto');
   const [editingModel, setEditingModel] = useState<ModelInfo | null>(null);
   const [localSaving, setLocalSaving] = useState(false);
+  const [constraintForm, setConstraintForm] = useState<ConstraintForm>(EMPTY_CONSTRAINTS);
+  const [constraintsOpen, setConstraintsOpen] = useState(false);
+  const [attachedImages, setAttachedImages] = useState<{ name: string; url: string }[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+
+  const readFile = (file: File, asText: boolean) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      if (asText) reader.readAsText(file);
+      else reader.readAsDataURL(file);
+    });
+
+  // Images go to the backend as data URLs; small text files are inlined into the prompt.
+  const handleFiles = async (files: File[]) => {
+    setAttachError(null);
+    for (const file of files) {
+      if (file.type.startsWith('image/')) {
+        if (file.size > MAX_IMAGE_BYTES) {
+          setAttachError(`${file.name} is larger than 5MB.`);
+          continue;
+        }
+        const url = await readFile(file, false);
+        setAttachedImages((prev) => (prev.length >= 4 ? prev : [...prev, { name: file.name, url }]));
+      } else if (file.size <= MAX_TEXT_BYTES && (file.type.startsWith('text/') || TEXT_EXT.test(file.name))) {
+        const text = await readFile(file, true);
+        setInput((prev) => `${prev}${prev ? '\n\n' : ''}--- ${file.name} ---\n${text}\n--- end of ${file.name} ---\n`);
+      } else {
+        setAttachError(`${file.name}: only images and text files (≤200KB) are supported.`);
+      }
+    }
+  };
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const handleQuickParamChange = async (
@@ -79,22 +118,28 @@ export default function ChatPanel({
 
   const send = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if ((!text && attachedImages.length === 0) || loading) return;
+    const images = attachedImages.map((a) => a.url);
+    const prompt = text || 'Describe this image.';
 
     const userMsg: ChatMessage = {
       id: uid(),
       role: 'user',
-      content: text,
+      content: prompt,
+      images,
       timestamp: new Date(),
     };
 
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
+    setAttachedImages([]);
+    setAttachError(null);
     setLoading(true);
 
     try {
-      const constraints = selectedModelKey !== 'auto' ? { preferred_model: selectedModelKey } : {};
-      const data = await postInfer(text, constraints as any);
+      const constraints: Record<string, unknown> = toConstraintPayload(constraintForm);
+      if (selectedModelKey !== 'auto') constraints.preferred_model = selectedModelKey;
+      const data = await postInfer(prompt, constraints as any, images);
 
       if (data.decision) {
         onDecision(data.decision);
@@ -104,13 +149,20 @@ export default function ChatPanel({
         const errorMsg: ChatMessage = {
           id: uid(),
           role: 'error',
-          content: `No Valid Model: ${data.message || data.error || 'No available model satisfies the prompt constraints.'}`,
+          content: `${data.status === 'QUOTA_EXHAUSTED' ? 'Daily Limit Reached' : data.status === 'ALL_MODELS_FAILED' ? 'Models Failed' : 'No Valid Model'}: ${data.message || data.error || 'No available model satisfies the prompt constraints.'}`,
           decision: data.decision,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
       } else {
-        const modelLabel = data.model_name || data.model_used;
+        const baseLabel = data.model_name || data.model_used;
+        // OpenRouter may serve image requests from a fallback vision model.
+        const configuredId = models.find((m) => m.model_key === data.model_used)?.model_id || '';
+        const servedBy =
+          data.served_by && configuredId && !configuredId.startsWith(data.served_by.split(':')[0])
+            ? data.served_by
+            : null;
+        const modelLabel = servedBy ? `${baseLabel} → ${servedBy.split('/').pop()}` : baseLabel;
         setLastUsedModel(modelLabel);
 
         const aiMsg: ChatMessage = {
@@ -148,6 +200,36 @@ export default function ChatPanel({
 
   const hasMessages = messages.length > 0;
 
+  const renderComposer = () => (
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column' }}>
+      {constraintsOpen && (
+        <ConstraintsPanel
+          value={constraintForm}
+          onChange={setConstraintForm}
+          onClose={() => setConstraintsOpen(false)}
+        />
+      )}
+      {(attachedImages.length > 0 || attachError) && (
+        <div style={styles.attachRow}>
+          {attachedImages.map((a, i) => (
+            <div key={i} style={styles.attachThumb} title={a.name}>
+              <img src={a.url} alt={a.name} style={styles.attachImg} />
+              <button
+                style={styles.attachRemove}
+                onClick={() => setAttachedImages((prev) => prev.filter((_, j) => j !== i))}
+                aria-label={`Remove ${a.name}`}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {attachError && <span style={styles.attachError}>{attachError}</span>}
+        </div>
+      )}
+      {renderInputCapsule()}
+    </div>
+  );
+
   // The Gemini-style prompt input capsule
   const renderInputCapsule = () => (
     <div style={styles.inputCapsule}>
@@ -164,6 +246,28 @@ export default function ChatPanel({
         </svg>
       </button>
 
+      {/* Hard constraints toggle */}
+      <button
+        style={{
+          ...styles.plusBtn,
+          width: 'auto',
+          padding: '0 8px',
+          fontSize: 12,
+          gap: 4,
+          color: constraintsOpen || activeConstraintCount(constraintForm) > 0 ? '#8ab4f8' : undefined,
+        }}
+        onClick={() => setConstraintsOpen((o) => !o)}
+        title="Set hard routing constraints (latency, cost, capability, context, preference)"
+        aria-label="Toggle constraints"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+          <line x1="4" y1="6" x2="20" y2="6" /><circle cx="9" cy="6" r="2" />
+          <line x1="4" y1="12" x2="20" y2="12" /><circle cx="15" cy="12" r="2" />
+          <line x1="4" y1="18" x2="20" y2="18" /><circle cx="7" cy="18" r="2" />
+        </svg>
+        {activeConstraintCount(constraintForm) > 0 && <span>{activeConstraintCount(constraintForm)}</span>}
+      </button>
+
       <input
         ref={fileInputRef}
         type="file"
@@ -171,8 +275,7 @@ export default function ChatPanel({
         multiple
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {
-            const names = Array.from(e.target.files).map((f) => f.name).join(', ');
-            setInput((prev) => prev + (prev ? '\n' : '') + `[Attached: ${names}]`);
+            handleFiles(Array.from(e.target.files));
           }
           e.target.value = '';
         }}
@@ -433,7 +536,7 @@ export default function ChatPanel({
 
             {/* Input bar centered on home screen (Gemini style) */}
             <div style={styles.homeInputContainer}>
-              {renderInputCapsule()}
+              {renderComposer()}
             </div>
           </div>
         ) : (
@@ -489,7 +592,7 @@ export default function ChatPanel({
       {/* ── Bottom Input Bar (when messages exist) ── */}
       {hasMessages && (
         <div style={styles.bottomInputWrap}>
-          {renderInputCapsule()}
+          {renderComposer()}
         </div>
       )}
 
@@ -650,6 +753,39 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'relative' as const,
     zIndex: 2,
   },
+  attachRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+    maxWidth: 720,
+  },
+  attachThumb: {
+    position: 'relative',
+    width: 56,
+    height: 56,
+    borderRadius: 10,
+    overflow: 'hidden',
+    border: '1px solid rgba(255,255,255,0.12)',
+  },
+  attachImg: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
+  attachRemove: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    border: 'none',
+    background: 'rgba(0,0,0,0.7)',
+    color: '#fff',
+    fontSize: 10,
+    cursor: 'pointer',
+    lineHeight: '18px',
+    padding: 0,
+  },
+  attachError: { color: '#fca5a5', fontSize: 12 },
   inputCapsule: {
     display: 'flex',
     alignItems: 'center',

@@ -7,6 +7,7 @@ import DetailedAnalysisModal from './DetailedAnalysisModal';
 interface Props {
   models: ModelInfo[];
   lastDecision: Decision | null;
+  onOpenDetailedAnalysis?: () => void;
 }
 
 type Section = 'decision' | 'tokens' | 'models';
@@ -47,7 +48,7 @@ const SECTIONS: { id: Section; title: string; icon: React.ReactNode }[] = [
   },
 ];
 
-export default function InspectorPanel({ models, lastDecision }: Props) {
+export default function InspectorPanel({ models, lastDecision, onOpenDetailedAnalysis }: Props) {
   const [openSections, setOpenSections] = useState<Set<Section>>(
     new Set(['decision', 'tokens', 'models'])
   );
@@ -60,6 +61,14 @@ export default function InspectorPanel({ models, lastDecision }: Props) {
       else next.add(id);
       return next;
     });
+  };
+
+  const handleOpenDetailed = () => {
+    if (onOpenDetailedAnalysis) {
+      onOpenDetailedAnalysis();
+    } else {
+      setShowDetailedModal(true);
+    }
   };
 
   const onlineCount = models.filter((m) => m.availability && m.enabled).length;
@@ -214,7 +223,7 @@ export default function InspectorPanel({ models, lastDecision }: Props) {
           <button
             type="button"
             style={styles.analysisBtn}
-            onClick={() => setShowDetailedModal(true)}
+            onClick={handleOpenDetailed}
             title="Open detailed analysis & audit logs"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">

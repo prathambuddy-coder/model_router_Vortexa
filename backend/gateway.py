@@ -8,6 +8,8 @@ Coordinates:
 """
 
 import os
+import concurrent.futures
+import threading
 import time
 import uuid
 from flask import Flask, request, jsonify
@@ -16,9 +18,9 @@ from dotenv import load_dotenv
 
 from models import registry
 from router import ModelRouter
-from model_adapter import ModelAdapter
+from model_adapter import ModelAdapter, transcribe_images
 from logger import routing_logger
-from constraint_engine import ConstraintEngine
+from constraint_engine import ConstraintEngine, is_vision_capable
 
 load_dotenv()
 
@@ -27,12 +29,48 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 _router = ModelRouter()
 _adapter = ModelAdapter()
+_hedge_pool = concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="hedge")
+
+
+# Circuit breaker: models that just rate-limited, stalled or returned nothing are skipped for a
+# while so the next request races healthy models immediately instead of re-learning the failure.
+FAILURE_COOLDOWN_S = 180
+_cooldown_until: dict = {}
+_cooldown_lock = threading.Lock()
+
+
+def _start_cooldown(model_key: str) -> None:
+    with _cooldown_lock:
+        _cooldown_until[model_key] = time.time() + FAILURE_COOLDOWN_S
+
+
+def _cooling_down() -> dict:
+    now = time.time()
+    with _cooldown_lock:
+        return {k: int(t - now) for k, t in _cooldown_until.items() if t > now}
+
+
+def _attempt_record(attempt: int, key: str, profile, result: dict) -> dict:
+    return {
+        "attempt": attempt,
+        "model_key": key,
+        "model_name": profile.name,
+        "success": result["success"],
+        "latency_ms": result["latency_ms"],
+        "tokens_used": result.get("tokens_used", 0),
+        "simulated": result.get("simulated", False),
+        "execution_mode": result.get("execution_mode", "SIMULATED"),
+        "error": result.get("error"),
+    }
 _engine = ConstraintEngine()
 
 MAX_FAILOVER = 2                 # at most 3 attempts in total
-PRIMARY_TIMEOUT_MS = 20000       # first-choice model gets 20s before failover
-FALLBACK_TIMEOUT_MS = 12000      # each fallback model gets 12s
-TOTAL_BUDGET_MS = 45000          # hard ceiling for the whole /api/infer request
+PRIMARY_TIMEOUT_MS = 70000       # first-choice model gets 70s (free models need ~45-60s for long answers)
+VISION_TRANSCRIBE_TIMEOUT_MS = 40000  # stage 1: reading the image(s)
+TOTAL_BUDGET_MS = 150000         # hard ceiling for the whole /api/infer request
+MAX_IMAGES = 4
+MAX_IMAGE_CHARS = 8_000_000      # ~6MB decoded per image
+HEDGE_WIDTH = int(os.environ.get("HEDGE_WIDTH", 2))  # models raced per round; 1 = sequential (saves quota)
 MIN_ATTEMPT_MS = 8000            # adapter's minimum per-call deadline
 
 
@@ -50,6 +88,28 @@ def _ok(data: dict, status: int = 200) -> tuple:
 # ===========================================================================
 # Pipeline A: Model Configuration API
 # ===========================================================================
+
+def _parse_images(body: dict) -> tuple:
+    """Validates optional image attachments (data URLs). Returns (images, error)."""
+    images = body.get("images") or []
+    if not isinstance(images, list) or len(images) > MAX_IMAGES:
+        return [], f"'images' must be a list of at most {MAX_IMAGES} data URLs."
+    for img in images:
+        if not isinstance(img, str) or not img.startswith("data:image/"):
+            return [], "Each image must be a 'data:image/...;base64,' URL."
+        if len(img) > MAX_IMAGE_CHARS:
+            return [], f"Image too large (max ~{MAX_IMAGE_CHARS * 3 // 4 // 1_000_000}MB each)."
+    return images, None
+
+
+def _apply_image_constraints(constraints: dict, images: list) -> dict:
+    """Attached images make vision a hard requirement and default the preference to multimodal."""
+    if not images:
+        return constraints
+    constraints = {**constraints, "requires_vision": True}
+    constraints.setdefault("preference", "multimodal_specialist")
+    return constraints
+
 
 @app.route("/api/health", methods=["GET"])
 def health():
@@ -135,6 +195,11 @@ def dry_run_route():
     if not prompt:
         return _error("'prompt' is required and must not be empty.")
 
+    images, img_err = _parse_images(body)
+    if img_err:
+        return _error(img_err)
+    constraints = _apply_image_constraints(constraints, images)
+
     valid, errs = _engine.validate_constraints(constraints)
     if not valid:
         return _error(f"Invalid constraints: {'; '.join(errs)}")
@@ -157,6 +222,43 @@ def infer():
     if not prompt:
         return _error("'prompt' is required and must not be empty.")
 
+    images, img_err = _parse_images(body)
+    if img_err:
+        return _error(img_err)
+    # Two-stage image handling: a vision model reads the image(s), then the extracted text is
+    # routed like any other prompt so the best text model (not just the vision model) answers.
+    vision_stage = None
+    if images:
+        vision_ids = [m.model_id for m in registry.get_all().values()
+                      if is_vision_capable(m) and m.enabled and m.availability and m.model_id]
+        vision_stage = transcribe_images(images, vision_ids, VISION_TRANSCRIBE_TIMEOUT_MS / 1000)
+        if not vision_stage["success"]:
+            routing_logger.log_request(
+                request_id=str(uuid.uuid4())[:8],
+                prompt=prompt,
+                constraints=constraints,
+                decision={"type": "VISION_STAGE_FAILED"},
+                response_time_ms=vision_stage["latency_ms"],
+                success=False,
+                error=vision_stage["error"],
+                model_used=None,
+                simulated=False,
+            )
+            return jsonify({
+                "success": False,
+                "status": "QUOTA_EXHAUSTED" if vision_stage.get("quota_exhausted") else "ALL_MODELS_FAILED",
+                "message": vision_stage["error"],
+                "error": vision_stage["error"],
+                "decision": None,
+                "audit_trail": [],
+                "latency_ms": vision_stage["latency_ms"],
+            }), 200
+        prompt = (
+            f"{prompt}\n\n[Content of the attached image(s), transcribed]\n"
+            f"{vision_stage['text']}"
+        )
+        images = []
+
     valid, errs = _engine.validate_constraints(constraints)
     if not valid:
         return _error(f"Invalid constraints: {'; '.join(errs)}")
@@ -164,8 +266,29 @@ def infer():
     request_id = str(uuid.uuid4())[:8]
     all_models = registry.get_all()
     audit_trail = []
-    excluded_keys = set()
+    vision_record = None
+    if vision_stage:
+        vision_record = ({
+            "attempt": 0,
+            "model_key": "vision-transcribe",
+            "model_name": f"Image reader ({vision_stage['served_by'] or 'vision model'})",
+            "success": True,
+            "latency_ms": vision_stage["latency_ms"],
+            "tokens_used": 0,
+            "simulated": False,
+            "execution_mode": "VISION_TRANSCRIBE",
+            "error": None,
+        })
+    vision_prefix = [vision_record] if vision_record else []
+    cooling = _cooling_down()
+    excluded_keys = set(cooling)
+    if not _router.route(prompt, constraints,
+                         {k: v for k, v in all_models.items() if k not in excluded_keys},
+                         request_id).get("selected"):
+        excluded_keys = set()  # every eligible model is cooling down: try them anyway
+        cooling = {}
     failover_count = 0
+    quota_exhausted = False
     final_decision = None
     final_response = None
     final_model = None
@@ -173,7 +296,9 @@ def infer():
     last_error = None
     exec_mode = "SIMULATED"
 
-    # Routing + Failover Loop (respects non-negotiable constraints)
+    # Routing + hedged failover (respects non-negotiable constraints). Free-tier models can stall
+    # for a minute or return nothing, so each round races the top choice against the next-best
+    # eligible model and keeps the first non-empty answer instead of trying them one at a time.
     for attempt in range(1, MAX_FAILOVER + 2):
         candidate_models = {
             k: v for k, v in all_models.items() if k not in excluded_keys
@@ -192,49 +317,116 @@ def infer():
         selected = decision.get("selected")
 
         if not selected:
-            # NO_VALID_MODEL
-            final_decision = decision
-            last_error = decision.get("message", "No available model satisfies all hard constraints.")
+            # NO_VALID_MODEL. After runtime failures, keep the last real routing decision so
+            # the failed model stays visible instead of vanishing from the candidate list.
+            if final_decision is None:
+                final_decision = decision
+            # Keep the runtime failure from an earlier attempt; it explains more than "no model left".
+            if not audit_trail:
+                last_error = decision.get("message", "No available model satisfies all hard constraints.")
             break
 
         if attempt > 1:
             failover_count += 1
             decision["failover_chain"].append(selected)
 
-        profile = all_models[selected]
-        timeout_ms = constraints.get("max_latency_ms", profile.max_latency_ms) or profile.max_latency_ms
-        attempt_cap_ms = PRIMARY_TIMEOUT_MS if attempt == 1 else FALLBACK_TIMEOUT_MS
-        timeout_ms = min(int(timeout_ms), attempt_cap_ms, max(remaining_ms, MIN_ATTEMPT_MS))
+        # A preferred (manually chosen) model runs alone; otherwise add the best-scoring backup.
+        racers = [selected]
+        if HEDGE_WIDTH > 1 and not constraints.get("preferred_model"):
+            backups = sorted(
+                (c for c in decision.get("candidates", [])
+                 if c.get("status") == "passed" and c.get("model_key") != selected),
+                key=lambda c: c.get("score") or 0,
+                reverse=True,
+            )
+            racers += [c["model_key"] for c in backups[: HEDGE_WIDTH - 1]]
 
-        result = _adapter.call_model(profile, prompt, int(timeout_ms))
+        # profile.max_latency_ms is a routing estimate, not a generation deadline; only an
+        # explicit user latency constraint should tighten the per-attempt timeout.
+        timeout_ms = constraints.get("max_latency_ms") or PRIMARY_TIMEOUT_MS
+        timeout_ms = int(min(int(timeout_ms), PRIMARY_TIMEOUT_MS, max(remaining_ms, MIN_ATTEMPT_MS)))
 
-        attempt_record = {
-            "attempt": attempt,
-            "model_key": selected,
-            "model_name": profile.name,
-            "success": result["success"],
-            "latency_ms": result["latency_ms"],
-            "tokens_used": result.get("tokens_used", 0),
-            "simulated": result.get("simulated", False),
-            "execution_mode": result.get("execution_mode", "SIMULATED"),
-            "error": result.get("error"),
+        futures = {
+            _hedge_pool.submit(_adapter.call_model, all_models[k], prompt, timeout_ms, images=images): k
+            for k in racers
         }
-        audit_trail.append(attempt_record)
         final_decision = decision
-        exec_mode = result.get("execution_mode", "SIMULATED")
+        winner = None
+        pending = set(futures)
+        try:
+            for fut in concurrent.futures.as_completed(futures, timeout=timeout_ms / 1000 + 5):
+                pending.discard(fut)
+                key = futures[fut]
+                result = fut.result()
+                audit_trail.append(_attempt_record(attempt, key, all_models[key], result))
+                exec_mode = result.get("execution_mode", "SIMULATED")
+                if result["success"]:
+                    winner = (key, result)
+                    break
+                if result.get("execution_mode") == "QUOTA_EXHAUSTED":
+                    quota_exhausted = True
+                    last_error = result["error"]
+                    break
+                excluded_keys.add(key)
+                _start_cooldown(key)
+                last_error = result.get("error", "Execution failure")
+        except concurrent.futures.TimeoutError:
+            pass
 
-        if result["success"]:
-            final_response = result["text"]
-            final_model = selected
-            final_result = result
+        # Racers still running lost the race (or overran); record them without counting a failure.
+        for fut in pending:
+            key = futures[fut]
+            if winner is None and not quota_exhausted:
+                excluded_keys.add(key)
+                _start_cooldown(key)
+            audit_trail.append({
+                "attempt": attempt, "model_key": key, "model_name": all_models[key].name,
+                "success": False, "latency_ms": int((time.time() - wall_start) * 1000),
+                "tokens_used": 0, "simulated": False,
+                "execution_mode": "SUPERSEDED" if winner else "TIMEOUT_FAILOVER",
+                "error": None if winner else f"'{all_models[key].name}' did not finish in time.",
+            })
+
+        if quota_exhausted:
+            break  # every free model shares the daily quota; further attempts only fail
+
+        if winner:
+            final_model, final_result = winner
+            final_response = final_result["text"]
+            exec_mode = final_result.get("execution_mode", exec_mode)
+            if final_model != selected:
+                decision["selected"] = final_model
+                decision["selected_name"] = all_models[final_model].name
+                decision["explanation"] = (
+                    f"{all_models[final_model].name} answered first in a parallel race against "
+                    f"{all_models[selected].name} (the top-ranked pick). " + (decision.get("explanation") or "")
+                )
             break
-        else:
-            # Failover: exclude failed candidate and re-run without relaxing constraints
-            excluded_keys.add(selected)
-            last_error = result.get("error", "Execution failure")
 
     total_ms = int((time.time() - wall_start) * 1000)
     last_sim = audit_trail[-1].get("simulated", False) if audit_trail else False
+
+    # Models that passed routing but failed at runtime are excluded from later routing
+    # passes; mark them in the final decision so the UI shows why they were skipped.
+    if final_decision:
+        cands = final_decision.setdefault("candidates", [])
+        for rec in audit_trail:
+            if rec["success"] or rec.get("execution_mode") == "SUPERSEDED":
+                continue
+            reason = f"Runtime failure: {rec.get('error') or 'execution error'}"
+            match = next((c for c in cands if c.get("model_key") == rec["model_key"]), None)
+            if match is None:
+                cands.append({"model_key": rec["model_key"], "name": rec["model_name"],
+                              "status": "rejected", "rejection_reason": reason})
+            else:
+                match["status"] = "rejected"
+                match["rejection_reason"] = reason
+        for key, secs in cooling.items():
+            if not any(c.get("model_key") == key for c in cands) and key in all_models:
+                cands.append({"model_key": key, "name": all_models[key].name, "status": "rejected",
+                              "rejection_reason": f"Runtime failure: cooling down after a recent failure ({secs}s left)"})
+        if final_model is None:
+            final_decision["selected"] = None
 
     # Attach live response parameters to final_decision for frontend Inspector
     if final_decision:
@@ -273,7 +465,7 @@ def infer():
             "model_used": final_model,
             "model_name": model_obj.name if model_obj else final_model,
             "decision": final_decision,
-            "audit_trail": audit_trail,
+            "audit_trail": vision_prefix + audit_trail,
             "latency_ms": total_ms,
             "failover_count": failover_count,
             "simulated": last_sim,
@@ -282,16 +474,21 @@ def infer():
             "prompt_tokens": final_result.get("prompt_tokens", 0),
             "completion_tokens": final_result.get("completion_tokens", 0),
             "usage": final_result.get("usage", {}),
+            "served_by": final_result.get("served_by"),
+            "image_read_by": vision_stage["served_by"] if vision_stage else None,
         })
     else:
         # Explicit NO_VALID_MODEL contract
         return jsonify({
             "success": False,
-            "status": "NO_VALID_MODEL",
-            "message": "No available model satisfies all hard constraints.",
+            "status": "QUOTA_EXHAUSTED" if quota_exhausted else ("ALL_MODELS_FAILED" if audit_trail else "NO_VALID_MODEL"),
+            "message": last_error if quota_exhausted else (
+                f"All {len({r['model_key'] for r in audit_trail})} eligible model(s) failed. Last error: {last_error}"
+                if audit_trail else (last_error or "No available model satisfies all hard constraints.")
+            ),
             "error": last_error or "No available model satisfies all hard constraints.",
             "decision": final_decision,
-            "audit_trail": audit_trail,
+            "audit_trail": vision_prefix + audit_trail,
             "latency_ms": total_ms,
         }), 200  # Return 200 with NO_VALID_MODEL so frontend parses clean decision explanation
 

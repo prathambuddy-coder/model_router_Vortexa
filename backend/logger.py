@@ -109,6 +109,10 @@ class RoutingLogger:
                 self._logs.pop(0)
             self._logs.append(entry)
 
+            # Config edits are audit-only; they are not inferences and must not skew stats
+            if (decision or {}).get("type") == "CONFIG_UPDATE":
+                return log_id
+
             # Update fast counters
             self._total_requests   += 1
             self._total_latency_ms += response_time_ms

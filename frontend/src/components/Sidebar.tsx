@@ -6,9 +6,10 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onNewChat: () => void;
+  onOpenDetailedAnalysis?: () => void;
 }
 
-export default function Sidebar({ models, isOpen, onClose, onNewChat }: Props) {
+export default function Sidebar({ models, isOpen, onClose, onNewChat, onOpenDetailedAnalysis }: Props) {
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -151,10 +152,30 @@ export default function Sidebar({ models, isOpen, onClose, onNewChat }: Props) {
           })}
         </div>
 
-        {/* Footer */}
+        {/* Footer with Detailed Analysis Navigation */}
         <div style={styles.sidebarFooter}>
-          <span style={styles.footerBrand}>Invaders 4.0 · Model Router</span>
-          <span style={styles.footerVersion}>v4.0</span>
+          {onOpenDetailedAnalysis && (
+            <button
+              type="button"
+              style={styles.detailedAnalysisNavBtn}
+              onClick={() => {
+                onClose();
+                onOpenDetailedAnalysis();
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="9" y1="9" x2="9" y2="15" />
+                <line x1="12" y1="6" x2="12" y2="15" />
+                <line x1="15" y1="11" x2="15" y2="15" />
+              </svg>
+              <span>Detailed Routing Analysis</span>
+            </button>
+          )}
+          <div style={styles.footerBrandRow}>
+            <span style={styles.footerBrand}>Invaders 4.0 · Model Router</span>
+            <span style={styles.footerVersion}>v4.0</span>
+          </div>
         </div>
       </aside>
     </>
@@ -360,12 +381,33 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#e3e3e3',
   },
   sidebarFooter: {
-    padding: '12px 16px',
-    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+    padding: '12px 14px',
+    borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+    background: 'rgba(0, 0, 0, 0.2)',
+  },
+  detailedAnalysisNavBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    padding: '9px 12px',
+    borderRadius: 10,
+    border: '1px solid rgba(138, 180, 248, 0.25)',
+    background: 'rgba(138, 180, 248, 0.08)',
+    color: '#8ab4f8',
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
+  },
+  footerBrandRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    background: 'rgba(0, 0, 0, 0.1)',
+    padding: '0 4px',
   },
   footerBrand: {
     fontSize: 11,

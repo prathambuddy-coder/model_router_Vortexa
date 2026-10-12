@@ -3,19 +3,19 @@
     "model_key": "liquid-lfm-2.6b",
     "name": "Liquid LFM2.5 2.6B",
     "role": "Fast: Simple questions, extraction, basic RAG",
-    "avg_latency_ms": 200,
+    "avg_latency_ms": 500,
     "max_latency_ms": 15200,
-    "measured_latency_ms": 120,
+    "measured_latency_ms": 16793,
     "capability_score": 4.2,
-    "context_length": 32768,
-    "reliability": 0.98,
+    "context_length": 8192,
+    "reliability": 0.95,
     "availability": true,
     "enabled": true,
     "cost_per_1k_tokens": 0.0,
     "provider": "openrouter",
     "model_id": "liquid/lfm-2.5-2.6b:free",
     "description": "Lightweight edge model delivering ultra-fast responses for simple queries, text extraction, and basic RAG.",
-    "tokens_used": 4705
+    "tokens_used": 11678
   },
   {
     "model_key": "nemotron-3.5-lightning",
@@ -23,7 +23,7 @@
     "role": "Balanced: General tasks and agentic workflows",
     "avg_latency_ms": 1150,
     "max_latency_ms": 2900,
-    "measured_latency_ms": 427,
+    "measured_latency_ms": 11631,
     "capability_score": 7.0,
     "context_length": 65536,
     "reliability": 0.96,
@@ -33,7 +33,7 @@
     "provider": "openrouter",
     "model_id": "nvidia/nemotron-3.5-lightning:free",
     "description": "High-throughput balanced model optimized for daily requests, agentic execution, and versatile general tasks.",
-    "tokens_used": 2117
+    "tokens_used": 11815
   },
   {
     "model_key": "nemotron-3-super",
@@ -41,7 +41,7 @@
     "role": "Advanced Reasoning: Complex reasoning and multistep analysis",
     "avg_latency_ms": 3800,
     "max_latency_ms": 14600,
-    "measured_latency_ms": 2298,
+    "measured_latency_ms": 11632,
     "capability_score": 9.5,
     "context_length": 131072,
     "reliability": 0.93,
@@ -51,7 +51,7 @@
     "provider": "openrouter",
     "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
     "description": "Massive 120B parameter MoE reasoning engine for deep chain-of-thought proofs, formal logic, and complex multi-step analysis.",
-    "tokens_used": 1358
+    "tokens_used": 11864
   },
   {
     "model_key": "north-mini-code",
@@ -59,7 +59,7 @@
     "role": "Coding Specialist: Coding and software engineering tasks",
     "avg_latency_ms": 1650,
     "max_latency_ms": 4200,
-    "measured_latency_ms": 425,
+    "measured_latency_ms": 30093,
     "capability_score": 8.7,
     "context_length": 65536,
     "reliability": 0.95,
@@ -69,7 +69,7 @@
     "provider": "openrouter",
     "model_id": "cohere/north-mini-code:free",
     "description": "Specialized coding model optimized for syntax generation, refactoring, algorithms, and software engineering.",
-    "tokens_used": 90
+    "tokens_used": 21520
   },
   {
     "model_key": "gemma-4-26b",
@@ -77,7 +77,7 @@
     "role": "Multimodal: Images, charts, video and visual-document analysis",
     "avg_latency_ms": 2300,
     "max_latency_ms": 6000,
-    "measured_latency_ms": 105,
+    "measured_latency_ms": 9500,
     "capability_score": 8.4,
     "context_length": 131072,
     "reliability": 0.94,
@@ -87,6 +87,6 @@
     "provider": "openrouter",
     "model_id": "google/gemma-4-26b-a4b-it:free",
     "description": "Multimodal foundation model excelling at visual document analysis, chart comprehension, OCR, and structured data synthesis.",
-    "tokens_used": 0
+    "tokens_used": 383
   }
 ]

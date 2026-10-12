@@ -90,7 +90,7 @@ def _analyze_complexity(prompt: str) -> dict:
             "score": 9.0,
             "label": "REASONING_INTENSIVE",
             "domain": "reasoning",
-            "inferred_min_capability": 7.5,
+            "inferred_min_capability": 9.0,
             "preference": "highest_capability",
             "matched_keywords": ["formal_proof"],
             "explanation": "Deep mathematical / formal logic proof detected -> Routes to high-capacity reasoning engine.",

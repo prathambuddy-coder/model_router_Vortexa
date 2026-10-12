@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { ChatMessage } from '../types';
+import RoutingVerdict from './RoutingVerdict';
 
 interface Props {
   message: ChatMessage;
@@ -51,6 +52,7 @@ export default function MessageBubble({ message }: Props) {
           <div>
             <p style={styles.errorTitle}>Routing Failed</p>
             <p style={styles.errorMsg}>{content}</p>
+            <RoutingVerdict decision={message.decision} />
           </div>
         </div>
       </div>
@@ -89,6 +91,13 @@ export default function MessageBubble({ message }: Props) {
             ...(isUser ? styles.userBubble : styles.aiBubble),
           }}
         >
+          {message.images && message.images.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+              {message.images.map((src, i) => (
+                <img key={i} src={src} alt="attachment" style={{ maxWidth: 180, maxHeight: 140, borderRadius: 8, display: 'block' }} />
+              ))}
+            </div>
+          )}
           <p style={{ ...styles.text, ...(isUser ? styles.userText : styles.aiText) }}>
             {content}
           </p>
@@ -128,6 +137,7 @@ export default function MessageBubble({ message }: Props) {
 
           <span style={styles.time}>{timeStr}</span>
         </div>
+        {!isUser && <RoutingVerdict decision={message.decision} />}
       </div>
 
       {isUser && (

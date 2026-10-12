@@ -5,6 +5,7 @@ import ChatPanel from './components/ChatPanel';
 import InspectorPanel from './components/InspectorPanel';
 import Sidebar from './components/Sidebar';
 import GradientWaves from './components/GradientWaves';
+import DetailedAnalysisPage from './components/DetailedAnalysisPage';
 import './styles/global.css';
 
 const POLL_INTERVAL_MS = 6000;
@@ -13,6 +14,7 @@ const MIN_INSPECTOR_WIDTH = 290;
 const MAX_INSPECTOR_WIDTH = 680;
 
 export default function App() {
+  const [currentPage, setCurrentPage] = useState<'chat' | 'analysis'>('chat');
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -82,6 +84,15 @@ export default function App() {
     };
   }, []);
 
+  if (currentPage === 'analysis') {
+    return (
+      <DetailedAnalysisPage
+        models={models}
+        onBack={() => setCurrentPage('chat')}
+      />
+    );
+  }
+
   return (
     <div style={styles.root}>
       {/* Background Gradient Waves from React Bits */}
@@ -116,6 +127,7 @@ export default function App() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNewChat={handleNewChat}
+        onOpenDetailedAnalysis={() => setCurrentPage('analysis')}
       />
 
       {/* Main Layout */}
@@ -156,7 +168,11 @@ export default function App() {
             transition: isDraggingRef.current ? 'none' : 'width 0.18s ease, opacity 0.15s ease',
           }}
         >
-          <InspectorPanel models={models} lastDecision={lastDecision} />
+          <InspectorPanel
+            models={models}
+            lastDecision={lastDecision}
+            onOpenDetailedAnalysis={() => setCurrentPage('analysis')}
+          />
         </div>
       </div>
     </div>

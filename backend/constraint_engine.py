@@ -20,6 +20,10 @@ from typing import List, Dict, Optional, Tuple
 from models import ModelProfile
 
 
+def is_vision_capable(model: ModelProfile) -> bool:
+    return "multimodal" in model.role.lower() or "vision" in model.role.lower()
+
+
 @dataclass
 class CheckResult:
     """Result of evaluating a single model against hard constraints."""
@@ -103,6 +107,10 @@ class ConstraintEngine:
                     f"Cost (${model.cost_per_token:.6f}/tok) exceeds max budget (${max_cost:.6f}/tok)"
                 )
 
+        # 6. Vision support (set by the gateway when images are attached)
+        if constraints.get("requires_vision") and not is_vision_capable(model):
+            violations.append("Model cannot read images (vision required for attached image)")
+
         return CheckResult(passes=len(violations) == 0, violations=violations)
 
     # Every preference scores ALL judge-editable parameters, so changing any of
@@ -111,7 +119,7 @@ class ConstraintEngine:
     _RANK_WEIGHTS = {
         "lowest_latency":     {"latency": 0.80, "cost": 0.10, "quality": 0.05, "context": 0.03, "reliability": 0.02},
         "cheapest":           {"cost": 0.70, "latency": 0.20, "quality": 0.05, "context": 0.03, "reliability": 0.02},
-        "highest_capability": {"quality": 0.55, "latency": 0.30, "reliability": 0.10, "cost": 0.03, "context": 0.02},
+        "highest_capability": {"quality": 0.65, "latency": 0.20, "reliability": 0.10, "cost": 0.03, "context": 0.02},
         "coding_specialist":  {"specialty": 0.30, "quality": 0.30, "latency": 0.32, "cost": 0.05, "context": 0.03},
         "multimodal_specialist": {"specialty": 0.30, "quality": 0.30, "latency": 0.32, "cost": 0.05, "context": 0.03},
         "balanced":           {"latency": 0.40, "quality": 0.32, "cost": 0.18, "context": 0.05, "reliability": 0.05},
@@ -147,6 +155,11 @@ class ConstraintEngine:
             if pref == "balanced":
                 if "balanced" in m.role.lower():
                     total += 0.12
+                elif "coding" in m.role.lower():
+                    total -= 0.05
+            elif pref == "highest_capability":
+                if "reasoning" in m.role.lower():
+                    total += 0.08
                 elif "coding" in m.role.lower():
                     total -= 0.05
             ranked.append(RankedModel(
